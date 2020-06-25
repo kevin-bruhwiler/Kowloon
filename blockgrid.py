@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import requests
 
 from time import time
@@ -8,38 +9,40 @@ from urllib.parse import urlparse
 
 class Blockgrid(object):
     def __init__(self):
-        self.chain = []
+        self.grid = {}
         self.current_transactions = []
         self.nodes = set()
 
         # Create the genesis block
-        self.new_block(previous_hash=1, proof=100)
+        self.new_block(previous_hash=1, index=(0, 0, 0), proof=100)
 
-    def new_block(self, proof, previous_hash=None):
+    def new_block(self, proof, index, previous_hash=None):
         """
         Create a new Block in the Blockgrid
         :param proof: <int> The proof given by the Proof of Work algorithm
+        :param index: <int> The index of the block being added
         :param previous_hash: (Optional) <str> Hash of previous Block
         :return: <dict> New Block
         """
 
         block = {
-            'index': len(self.chain) + 1,
+            'index': index,
             'timestamp': time(),
             'transactions': self.current_transactions,
             'proof': proof,
-            'previous_hash': previous_hash or self.hash(self.chain[-1]),
+            'previous_hash': previous_hash or self.hash(self.last_block(index)),
         }
 
         # Reset the current list of transactions
         self.current_transactions = []
 
-        self.chain.append(block)
+        self.grid[index] = block
         return block
 
-    def new_transaction(self, sender, recipient, amount):
+    def new_transaction(self, index, sender, recipient, amount):
         """
         Creates a new transaction to go into the next mined Block
+        :param index: <str> Index of the block
         :param sender: <str> Address of the Sender
         :param recipient: <str> Address of the Recipient
         :param amount: <int> Amount
@@ -52,7 +55,7 @@ class Blockgrid(object):
             'amount': amount,
         })
 
-        return self.last_block['index'] + 1
+        return self.last_block(index)['index']
 
     def register_node(self, address):
         """
@@ -64,31 +67,25 @@ class Blockgrid(object):
         parsed_url = urlparse(address)
         self.nodes.add(parsed_url.netloc)
 
-    def valid_chain(self, chain):
+    def valid_chain(self, grid):
         """
         Determine if a given Blockgrid is valid
-        :param chain: <list> A Blockgrid
+        :param grid: <list> A Blockgrid
         :return: <bool> True if valid, False if not
         """
 
-        last_block = chain[0]
-        current_index = 1
-
-        while current_index < len(chain):
-            block = chain[current_index]
-            print(f'{last_block}')
+        for k, v in grid.iteritems():
+            block = v
+            print(f'{grid.last_block(k)}')
             print(f'{block}')
             print("\n-----------\n")
             # Check that the hash of the block is correct
-            if block['previous_hash'] != self.hash(last_block):
+            if block['previous_hash'] != self.hash(grid.last_block(k)):
                 return False
 
             # Check that the Proof of Work is correct
-            if not self.valid_proof(last_block['proof'], block['proof']):
+            if not self.valid_proof(grid.last_block(k)['proof'], block['proof']):
                 return False
-
-            last_block = block
-            current_index += 1
 
         return True
 
@@ -100,10 +97,10 @@ class Blockgrid(object):
         """
 
         neighbours = self.nodes
-        new_chain = None
+        new_grid = None
 
         # We're only looking for chains longer than ours
-        max_length = len(self.chain)
+        max_length = len(self.grid)
 
         # Grab and verify the chains from all the nodes in our network
         for node in neighbours:
@@ -111,16 +108,16 @@ class Blockgrid(object):
 
             if response.status_code == 200:
                 length = response.json()['length']
-                chain = response.json()['chain']
+                grid = response.json()['grid']
 
                 # Check if the length is longer and the chain is valid
-                if length > max_length and self.valid_chain(chain):
+                if length > max_length and self.valid_chain(grid):
                     max_length = length
-                    new_chain = chain
+                    new_grid = grid
 
         # Replace our chain if we discovered a new, valid chain longer than ours
-        if new_chain:
-            self.chain = new_chain
+        if new_grid:
+            self.grid = new_grid
             return True
 
         return False
@@ -137,34 +134,43 @@ class Blockgrid(object):
         block_string = json.dumps(block, sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
 
-    @property
-    def last_block(self):
-        return self.chain[-1]
+    def last_block(self, index):
+        """
+        Return the previous block in the grid for the specified index
+        :param index: <tuple>
+        :return: <block>
+        """
+        index_max = max(range(len(index)), key=lambda i: abs(index[i]))
+        last_index = tuple(x if i != index_max else x - 1 * math.copysign(1, x) for i, x in enumerate(index))
+        return self.grid[last_index]
 
-    def proof_of_work(self, last_proof):
+    def proof_of_work(self, last_proof, index):
         """
         Simple Proof of Work Algorithm:
          - Find a number p' such that hash(pp') contains leading 4 zeroes, where p is the previous p'
          - p is the previous proof, and p' is the new proof
         :param last_proof: <int>
+        :param index: <int>
         :return: <int>
         """
 
         proof = 0
-        while self.valid_proof(last_proof, proof) is False:
+        while self.valid_proof(last_proof, proof, index) is False:
             proof += 1
 
         return proof
 
     @staticmethod
-    def valid_proof(last_proof, proof):
+    def valid_proof(last_proof, proof, index):
         """
         Validates the Proof: Does hash(last_proof, proof) contain 4 leading zeroes?
         :param last_proof: <int> Previous Proof
         :param proof: <int> Current Proof
+        :param index: <int> Current index
         :return: <bool> True if correct, False if not.
         """
 
         guess = f'{last_proof}{proof}'.encode()
         guess_hash = hashlib.sha256(guess).hexdigest()
-        return guess_hash[:4] == "0000"
+        diff = max(map(abs, index))
+        return guess_hash[:diff] == "0" * diff
