@@ -10,17 +10,17 @@ from urllib.parse import urlparse
 class Blockgrid(object):
     def __init__(self):
         self.grid = {}
-        self.current_transactions = []
         self.nodes = set()
 
         # Create the genesis block
-        self.new_block(previous_hash=1, index=(0, 0, 0), proof=100)
+        self.new_block(previous_hash=0, index=(0, 0, 0))
 
-    def new_block(self, proof, index, previous_hash=None):
+    def new_block(self, index, previous_hash):
         """
         Create a new Block in the Blockgrid
         :param proof: <int> The proof given by the Proof of Work algorithm
         :param index: <int> The index of the block being added
+        :param owner: <int> The public key of the block owner
         :param previous_hash: (Optional) <str> Hash of previous Block
         :return: <dict> New Block
         """
@@ -28,31 +28,26 @@ class Blockgrid(object):
         block = {
             'index': index,
             'timestamp': time(),
-            'transactions': self.current_transactions,
-            'proof': proof,
-            'previous_hash': previous_hash or self.hash(self.last_block(index)),
+            'data': [],
+            'owner': None,
+            'previous_hash': previous_hash,
         }
-
-        # Reset the current list of transactions
-        self.current_transactions = []
 
         self.grid[index] = block
         return block
 
-    def new_transaction(self, index, sender, recipient, amount):
+    def new_transaction(self, index, data, signature):
         """
         Creates a new transaction to go into the next mined Block
         :param index: <str> Index of the block
-        :param sender: <str> Address of the Sender
-        :param recipient: <str> Address of the Recipient
-        :param amount: <int> Amount
+        :param data: <str> Data being stored in the block
+        :param signature: <str> Signature of the owner of the block
         :return: <int> The index of the Block that will hold this transaction
         """
 
-        self.current_transactions.append({
-            'sender': sender,
-            'recipient': recipient,
-            'amount': amount,
+        self.grid[index].data.append({
+            'data': data,
+            'signature': signature,
         })
 
         return self.last_block(index)['index']
@@ -84,7 +79,7 @@ class Blockgrid(object):
                 return False
 
             # Check that the Proof of Work is correct
-            if not self.valid_proof(grid.last_block(k)['proof'], block['proof']):
+            if not self.valid_proof(grid.last_block(k)['proof'], block['proof'], k):
                 return False
 
         return True
@@ -131,18 +126,33 @@ class Blockgrid(object):
         """
 
         # We must make sure that the Dictionary is Ordered, or we'll have inconsistent hashes
-        block_string = json.dumps(block, sort_keys=True).encode()
+        block_string = json.dumps({k: v for k, v in block.items() if k != "data"}, sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
 
-    def last_block(self, index):
+    @staticmethod
+    def hash_without_proof(block):
+        """
+        Creates a SHA-256 hash of a Block without the proof field (used for proof-of-work)
+        :param block: <dict> Block
+        :return: <str>
+        """
+
+        # We must make sure that the Dictionary is Ordered, or we'll have inconsistent hashes
+        block_string = json.dumps({k: v for k, v in block.items() if k != "data" and k != "proof"}, sort_keys=True).encode()
+        return hashlib.sha256(block_string).hexdigest()
+
+    def last_index(self, index):
         """
         Return the previous block in the grid for the specified index
         :param index: <tuple>
         :return: <block>
         """
+        if index == (0, 0, 0):
+            return self.grid[index]
+
         index_max = max(range(len(index)), key=lambda i: abs(index[i]))
         last_index = tuple(x if i != index_max else x - 1 * math.copysign(1, x) for i, x in enumerate(index))
-        return self.grid[last_index]
+        return last_index
 
     def proof_of_work(self, last_proof, index):
         """
@@ -163,7 +173,7 @@ class Blockgrid(object):
     @staticmethod
     def valid_proof(last_proof, proof, index):
         """
-        Validates the Proof: Does hash(last_proof, proof) contain 4 leading zeroes?
+        Validates the Proof: Does hash(last_proof, proof) contain max(index) leading zeroes?
         :param last_proof: <int> Previous Proof
         :param proof: <int> Current Proof
         :param index: <int> Current index

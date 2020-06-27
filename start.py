@@ -1,6 +1,8 @@
 from uuid import uuid4
 from flask import Flask, jsonify, request
 
+import math
+
 from blockgrid import Blockgrid
 
 app = Flask(__name__)
@@ -14,29 +16,35 @@ def mine():
     values = request.get_json()
 
     index = tuple(values["index"])
-    last_block = blockgrid.last_block(index)
-    last_proof = last_block['proof']
+
+    if index not in blockgrid.grid:
+        return 'Previous block has not been mined', 400
+
+    block = blockgrid.grid[index].copy()
+    block["owner"] = values["signature"]
+    last_proof = blockgrid.hash_without_proof(block)
     proof = blockgrid.proof_of_work(last_proof, index)
 
-    # We must receive a reward for finding the proof.
-    # The sender is "0" to signify that this node has mined a new coin.
-    blockgrid.new_transaction(
-        index=index,
-        sender="0",
-        recipient=node_identifier,
-        amount=1,
-    )
-
     # Forge the new Block by adding it to the chain
-    previous_hash = blockgrid.hash(last_block)
-    block = blockgrid.new_block(proof, index, previous_hash)
+    blockgrid.grid[index]["owner"] = values["signature"]
+    blockgrid.grid[index]["proof"] = proof
+    previous_hash = blockgrid.hash(blockgrid.grid[index])
+
+    for i in range(len(index)):
+        for j in (-1, 1):
+            l_index = list(index)
+            l_index[i] += j
+            new_index = tuple(l_index)
+            if new_index not in blockgrid.grid:
+                blockgrid.new_block(new_index, previous_hash)
 
     response = {
         'message': "New Block Forged",
-        'index': block['index'],
-        'transactions': block['transactions'],
-        'proof': block['proof'],
-        'previous_hash': block['previous_hash'],
+        'index': blockgrid.grid[index]['index'],
+        'owner': blockgrid.grid[index]['owner'],
+        'data': blockgrid.grid[index]['data'],
+        'proof': blockgrid.grid[index]['proof'],
+        'previous_hash': blockgrid.grid[index]['previous_hash'],
     }
     return jsonify(response), 200
 
@@ -46,21 +54,21 @@ def new_transaction():
     values = request.get_json()
 
     # Check that the required fields are in the POST'ed data
-    required = ['sender', 'recipient', 'amount']
+    required = ['index', 'data', 'signature']
     if not all(k in values for k in required):
         return 'Missing values', 400
 
     # Create a new Transaction
-    index = blockgrid.new_transaction(values['sender'], values['recipient'], values['amount'])
+    index = blockgrid.new_transaction(tuple(values['index']), values['data'], values['signature'])
 
     response = {'message': f'Transaction will be added to Block {index}'}
     return jsonify(response), 200
 
 
 @app.route('/grid', methods=['GET'])
-def full_chain():
+def full_grid():
     response = {
-        'chain': blockgrid.grid,
+        'chain': {":".join(map(str, k)): v for k, v in blockgrid.grid.items()},
         'length': len(blockgrid.grid),
     }
     return jsonify(response), 200
