@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 import requests
+import pickle
 
 from time import time
 from urllib.parse import urlparse
@@ -117,6 +118,14 @@ class Blockgrid(object):
 
         return False
 
+    def save(self, filename):
+        with open(filename, "wb") as f:
+            pickle.dump(self.grid, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def load(self, filename):
+        with open(filename, "rb") as f:
+            self.grid = pickle.load(f)
+
     @staticmethod
     def hash(block):
         """
@@ -138,7 +147,8 @@ class Blockgrid(object):
         """
 
         # We must make sure that the Dictionary is Ordered, or we'll have inconsistent hashes
-        block_string = json.dumps({k: v for k, v in block.items() if k != "data" and k != "proof"}, sort_keys=True).encode()
+        block_string = json.dumps({k: v for k, v in block.items() if k != "data" and k != "proof"},
+                                  sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
 
     def last_index(self, index):

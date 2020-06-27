@@ -1,13 +1,16 @@
 from uuid import uuid4
 from flask import Flask, jsonify, request
 
-import math
+import os
 
 from blockgrid import Blockgrid
 
 app = Flask(__name__)
 node_identifier = str(uuid4()).replace('-', '')
 blockgrid = Blockgrid()
+
+if os.path.isfile("./blockgrid.pkl"):
+    blockgrid.load("blockgrid.pkl")
 
 
 @app.route('/mine', methods=['GET'])
@@ -46,6 +49,9 @@ def mine():
         'proof': blockgrid.grid[index]['proof'],
         'previous_hash': blockgrid.grid[index]['previous_hash'],
     }
+
+    blockgrid.save("blockgrid.pkl")
+
     return jsonify(response), 200
 
 
@@ -62,6 +68,9 @@ def new_transaction():
     index = blockgrid.new_transaction(tuple(values['index']), values['data'], values['signature'])
 
     response = {'message': f'Transaction will be added to Block {index}'}
+
+    blockgrid.save("blockgrid.pkl")
+
     return jsonify(response), 200
 
 
@@ -106,6 +115,8 @@ def consensus():
             'message': 'Our chain is authoritative',
             'chain': blockgrid.grid
         }
+
+    blockgrid.save("blockgrid.pkl")
 
     return jsonify(response), 200
 
