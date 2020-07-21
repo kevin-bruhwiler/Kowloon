@@ -7,6 +7,8 @@ import pickle
 from time import time
 from urllib.parse import urlparse
 
+from sign import verify
+
 
 class Blockgrid(object):
     def __init__(self):
@@ -29,6 +31,7 @@ class Blockgrid(object):
         block = {
             'index': index,
             'timestamp': time(),
+            'updated': None,
             'data': [],
             'owner': None,
             'previous_hash': previous_hash,
@@ -51,7 +54,9 @@ class Blockgrid(object):
             'signature': signature,
         })
 
-        return self.last_block(index)['index']
+        self.grid[index]["updated"] = time()
+
+        return index
 
     def register_node(self, address):
         """
@@ -83,6 +88,10 @@ class Blockgrid(object):
             if not self.valid_proof(grid.last_block(k)['proof'], block['proof'], k):
                 return False
 
+            for d in block["data"]:
+                if not verify(block["owner"], d["data"], d["signature"]):
+                    return False
+
         return True
 
     def resolve_conflicts(self):
@@ -107,9 +116,16 @@ class Blockgrid(object):
                 grid = response.json()['grid']
 
                 # Check if the length is longer and the chain is valid
-                if length > max_length and self.valid_chain(grid):
-                    max_length = length
-                    new_grid = grid
+                if self.valid_chain(grid):
+                    if length > max_length:
+                        max_length = length
+                        new_grid = grid
+
+                    # Update data for each block if other block timestamp > ours
+                    for (k1, v1), (k2, v2) in zip(self.grid.iteritems(), grid.iteritems()):
+                        if v2['updated'] > v1['updated']:
+                            v1["data"] = v2["data"]
+
 
         # Replace our chain if we discovered a new, valid chain longer than ours
         if new_grid:
