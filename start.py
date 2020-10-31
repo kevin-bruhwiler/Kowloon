@@ -24,22 +24,11 @@ def mine():
         return 'Previous block has not been mined', 400
 
     block = blockgrid.grid[index].copy()
-    block["owner"] = values["signature"]
     last_proof = blockgrid.hash_without_proof(block)
     proof = blockgrid.proof_of_work(last_proof, index)
 
     # Forge the new Block by adding it to the chain
-    blockgrid.grid[index]["owner"] = values["signature"]
-    blockgrid.grid[index]["proof"] = proof
-    previous_hash = blockgrid.hash(blockgrid.grid[index])
-
-    for i in range(len(index)):
-        for j in (-1, 1):
-            l_index = list(index)
-            l_index[i] += j
-            new_index = tuple(l_index)
-            if new_index not in blockgrid.grid:
-                blockgrid.new_block(new_index, previous_hash)
+    blockgrid.sign_block(index, proof, values["signature"])
 
     response = {
         'message': "New Block Forged",
@@ -49,8 +38,6 @@ def mine():
         'proof': blockgrid.grid[index]['proof'],
         'previous_hash': blockgrid.grid[index]['previous_hash'],
     }
-
-    blockgrid.save("blockgrid.pkl")
 
     return jsonify(response), 200
 
@@ -115,8 +102,6 @@ def consensus():
             'message': 'Our chain is authoritative',
             'chain': blockgrid.grid
         }
-
-    blockgrid.save("blockgrid.pkl")
 
     return jsonify(response), 200
 

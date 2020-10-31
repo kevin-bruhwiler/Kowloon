@@ -21,9 +21,7 @@ class Blockgrid(object):
     def new_block(self, index, previous_hash):
         """
         Create a new Block in the Blockgrid
-        :param proof: <int> The proof given by the Proof of Work algorithm
         :param index: <int> The index of the block being added
-        :param owner: <int> The public key of the block owner
         :param previous_hash: (Optional) <str> Hash of previous Block
         :return: <dict> New Block
         """
@@ -33,6 +31,7 @@ class Blockgrid(object):
             'timestamp': time(),
             'updated': None,
             'data': [],
+            'proof': None,
             'owner': None,
             'previous_hash': previous_hash,
         }
@@ -57,6 +56,27 @@ class Blockgrid(object):
         self.grid[index]["updated"] = time()
 
         return index
+
+    def sign_block(self, index, proof, owner):
+        """
+        Adds a proof of work and an owner to an empty block
+        :param index: <str> Index of the block
+        :param proof: <str> The proof of work for the block
+        :param owner: <str> The public key of the block miner
+        :return: <int> The index of the Block that will hold this transaction
+        """
+        self.grid[index]["owner"] = owner
+        self.grid[index]["proof"] = proof
+        previous_hash = self.hash(self.grid[index])
+
+        # Add adjacent unsigned blocks
+        for i in range(len(index)):
+            for j in (-1, 1):
+                l_index = list(index)
+                l_index[i] += j
+                new_index = tuple(l_index)
+                if new_index not in self.grid:
+                    self.new_block(new_index, previous_hash)
 
     def register_node(self, address):
         """
@@ -125,7 +145,6 @@ class Blockgrid(object):
                     for (k1, v1), (k2, v2) in zip(self.grid.iteritems(), grid.iteritems()):
                         if v2['updated'] > v1['updated']:
                             v1["data"] = v2["data"]
-
 
         # Replace our chain if we discovered a new, valid chain longer than ours
         if new_grid:
