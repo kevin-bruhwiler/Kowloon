@@ -16,24 +16,26 @@ class Blockgrid(object):
         self.nodes = set()
 
         # Create the genesis block
-        self.new_block(previous_hash=0, index=(0, 0, 0))
+        self.new_block(previous_hash=0, index=(0, 0, 0), previous_index=(0, 0, 0))
 
-    def new_block(self, index, previous_hash):
+    def new_block(self, index, previous_hash, previous_index):
         """
         Create a new Block in the Blockgrid
         :param index: <int> The index of the block being added
-        :param previous_hash: (Optional) <str> Hash of previous Block
+        :param previous_hash: <str> Hash of the previous Block
+        :param previous_index: <tuple> Index of the previous Block
         :return: <dict> New Block
         """
 
         block = {
-            'index': index,
+            'index': tuple(index),
             'timestamp': time(),
             'updated': None,
             'data': [],
             'proof': None,
             'owner': None,
             'previous_hash': previous_hash,
+            'previous_index': tuple(previous_index)
         }
 
         self.grid[index] = block
@@ -76,7 +78,7 @@ class Blockgrid(object):
                 l_index[i] += j
                 new_index = tuple(l_index)
                 if new_index not in self.grid:
-                    self.new_block(new_index, previous_hash)
+                    self.new_block(new_index, previous_hash, tuple(index))
 
     def register_node(self, address):
         """
@@ -88,24 +90,30 @@ class Blockgrid(object):
         parsed_url = urlparse(address)
         self.nodes.add(parsed_url.netloc)
 
-    def valid_chain(self, grid):
+    def valid_chain(self, other_grid):
         """
         Determine if a given Blockgrid is valid
-        :param grid: <list> A Blockgrid
+        :param other_grid: <list> A Blockgrid
         :return: <bool> True if valid, False if not
         """
 
-        for k, v in grid.iteritems():
+        for k, v in other_grid.items():
             block = v
-            print(f'{grid.last_block(k)}')
-            print(f'{block}')
-            print("\n-----------\n")
+
+            if tuple(block["index"]) == (0, 0, 0):
+                continue
+
+            prev = tuple(block["previous_index"])
             # Check that the hash of the block is correct
-            if block['previous_hash'] != self.hash(grid.last_block(k)):
+            if block['previous_hash'] != self.hash(other_grid[prev]):
                 return False
 
+            # If the block has no owner we're done
+            if block['owner'] is None and len(block["data"]) == 0:
+                continue
+
             # Check that the Proof of Work is correct
-            if not self.valid_proof(grid.last_block(k)['proof'], block['proof'], k):
+            if not self.valid_proof(self.hash_without_proof(block), block['proof'], k):
                 return False
 
             for d in block["data"]:
@@ -113,6 +121,15 @@ class Blockgrid(object):
                     return False
 
         return True
+
+    def compare_grids(self, other_grid):
+        """
+        Compares two grids to determine if ours is authoritative
+        :return: <bool> True if the other grid is authoritative, False if not
+        """
+        if self.valid_chain(other_grid) and len(other_grid) > len(self.grid):
+            return True
+        return False
 
     def resolve_conflicts(self):
         """
@@ -135,14 +152,13 @@ class Blockgrid(object):
                 length = response.json()['length']
                 grid = response.json()['grid']
 
-                # Check if the length is longer and the chain is valid
-                if self.valid_chain(grid):
+                if self.compare_grids(grid):
                     if length > max_length:
                         max_length = length
                         new_grid = grid
 
                     # Update data for each block if other block timestamp > ours
-                    for (k1, v1), (k2, v2) in zip(self.grid.iteritems(), grid.iteritems()):
+                    for (k1, v1), (k2, v2) in zip(self.grid.items(), grid.items()):
                         if v2['updated'] > v1['updated']:
                             v1["data"] = v2["data"]
 
@@ -170,7 +186,8 @@ class Blockgrid(object):
         """
 
         # We must make sure that the Dictionary is Ordered, or we'll have inconsistent hashes
-        block_string = json.dumps({k: v for k, v in block.items() if k != "data"}, sort_keys=True).encode()
+        block_string = json.dumps({k: v for k, v in block.items() if k != "data" and k != "updated"},
+                                  sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
 
     @staticmethod
@@ -182,7 +199,7 @@ class Blockgrid(object):
         """
 
         # We must make sure that the Dictionary is Ordered, or we'll have inconsistent hashes
-        block_string = json.dumps({k: v for k, v in block.items() if k != "data" and k != "proof"},
+        block_string = json.dumps({k: v for k, v in block.items() if k == "owner" and k == "index" and k == "previous_hash"},
                                   sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
 
