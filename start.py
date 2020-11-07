@@ -60,7 +60,7 @@ def get_app():
 
         response = {'message': f'Transaction will be added to Block {index}'}
 
-        blockgrid.save("blockgrid.pkl")
+        # blockgrid.save("blockgrid.pkl")
 
         return jsonify(response), 200
 
@@ -80,6 +80,30 @@ def get_app():
 
         response = {
             'auth': blockgrid.compare_grids(other_grid),
+        }
+        return jsonify(response), 200
+
+    @app.route('/grid/replace', methods=['PUT'])
+    def replace_grid():
+        values = request.get_json()
+
+        other_grid = {tuple(map(int, k.split(":"))): v for k, v in values.get('grid').items()}
+        blockgrid.replace_grid(other_grid)
+
+        response = {
+            'message': "grid has been replaced",
+        }
+        return jsonify(response), 200
+
+    @app.route('/grid/update', methods=['GET'])
+    def update_grids():
+        values = request.get_json()
+
+        grid1 = {tuple(map(int, k.split(":"))): v for k, v in values.get('shorter_grid').items()}
+        grid2 = {tuple(map(int, k.split(":"))): v for k, v in values.get('longer_grid').items()}
+
+        response = {
+            'grid': {":".join(map(str, k)): v for k, v in blockgrid.update_grid(grid1, grid2).items()},
         }
         return jsonify(response), 200
 

@@ -30,7 +30,7 @@ class Blockgrid(object):
         block = {
             'index': tuple(index),
             'timestamp': time(),
-            'updated': None,
+            'updated': time(),
             'data': [],
             'proof': None,
             'owner': None,
@@ -50,7 +50,7 @@ class Blockgrid(object):
         :return: <int> The index of the Block that will hold this transaction
         """
 
-        self.grid[index].data.append({
+        self.grid[index]["data"].append({
             'data': data,
             'signature': signature,
         })
@@ -90,7 +90,36 @@ class Blockgrid(object):
         parsed_url = urlparse(address)
         self.nodes.add(parsed_url.netloc)
 
-    def valid_chain(self, other_grid):
+    def replace_grid(self, other_grid):
+        """
+        Replaces the current grid with a new gird - primarily used for testing
+        :param other_grid: <dict> The new grid
+        :return: None
+        """
+        self.grid = other_grid
+
+    def update_grid(self, longer_grid, shorter_grid):
+        """
+        Determine if a given Blockgrid is valid
+        :param longer_grid: <list> The longer of two Blockgrids
+        :param shorter_grid: <list> The shorter of two Blockgrids
+        :return: <dict> The longer Blockgrid, with any updated data from the shorter grid
+        """
+
+        for idx, block in shorter_grid.items():
+            # If the block is in our chain
+            if idx in longer_grid:
+                # If the block's proof is valid
+                if self.valid_proof(self.hash_without_proof(block), block['proof'], idx):
+                    # If the block in the other chain has the same owner as ours
+                    if block["owner"] == longer_grid[idx]["owner"]:
+                        # If that block's data has been updated more recently
+                        if block["updated"] > longer_grid[idx]["updated"]:
+                            longer_grid[idx]["data"] = block["data"]
+                            longer_grid[idx]["updated"] = block["updated"]
+        return longer_grid
+
+    def valid_gird(self, other_grid):
         """
         Determine if a given Blockgrid is valid
         :param other_grid: <list> A Blockgrid
@@ -127,7 +156,7 @@ class Blockgrid(object):
         Compares two grids to determine if ours is authoritative
         :return: <bool> True if the other grid is authoritative, False if not
         """
-        if self.valid_chain(other_grid) and len(other_grid) > len(self.grid):
+        if self.valid_gird(other_grid) and len(other_grid) > len(self.grid):
             return True
         return False
 
@@ -155,12 +184,10 @@ class Blockgrid(object):
                 if self.compare_grids(grid):
                     if length > max_length:
                         max_length = length
+                        grid = self.update_grid(grid, self.grid)
                         new_grid = grid
-
-                    # Update data for each block if other block timestamp > ours
-                    for (k1, v1), (k2, v2) in zip(self.grid.items(), grid.items()):
-                        if v2['updated'] > v1['updated']:
-                            v1["data"] = v2["data"]
+                    else:
+                        self.grid = self.update_grid(self.grid, grid)
 
         # Replace our chain if we discovered a new, valid chain longer than ours
         if new_grid:
