@@ -76,6 +76,8 @@ class MiningTest(unittest.TestCase):
         for block in [(0, 0, 2), (0, 2, 0)]:
             response = client1.get('/mine', data=json.dumps({"index": block, "signature": public_key}),
                                    content_type='application/json')
+            client1.post('/transactions/new', data=json.dumps({'index': block, 'data': "test", 'signature': public_key})
+                         , content_type='application/json')
             self.assertEqual(response.status_code, 200)
 
         grid1 = dict(client1.get('/grid').get_json().get('grid'))
