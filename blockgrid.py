@@ -117,6 +117,9 @@ class Blockgrid(object):
                         if block["updated"] > longer_grid[idx]["updated"]:
                             longer_grid[idx]["data"] = block["data"]
                             longer_grid[idx]["updated"] = block["updated"]
+            # If the block is not in our grid, but is in the shorter valid grid
+            else:
+                longer_grid[idx] = block
         return longer_grid
 
     def valid_gird(self, other_grid):
