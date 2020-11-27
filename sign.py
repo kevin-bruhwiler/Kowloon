@@ -1,5 +1,7 @@
 from Crypto.PublicKey import RSA
 from Crypto import Random
+from Crypto.Hash import SHA256
+from Crypto.Signature import pkcs1_15
 import base64
 
 
@@ -11,11 +13,15 @@ def rsakeys():
 
 
 def sign(private_key, data):
-    return base64.b64encode(str((private_key.sign(data, ''))[0]).encode())
+    return pkcs1_15.new(private_key).sign(SHA256.new(data))
 
 
 def verify(public_key, data, signature):
-    return public_key.verify(data, (int(base64.b64decode(signature)),))
+    try:
+        pkcs1_15.new(public_key).verify(SHA256.new(data), signature)
+        return True
+    except (ValueError, TypeError):
+        return False
 
 
 def generate_keys():
@@ -40,6 +46,8 @@ def load_saved_keys():
 
 if __name__ == "__main__":
     d = b"hello there"
+    generate_keys()
     prv_key, pub_key = load_saved_keys()
     sig = sign(prv_key, d)
     print(sig, "\n", pub_key.exportKey())
+    print(verify(pub_key, d, sig))

@@ -1,7 +1,8 @@
+import json
 from uuid import uuid4
 from flask import Flask, jsonify, request
 
-import os
+from sign import load_saved_keys, sign
 
 from blockgrid import Blockgrid
 
@@ -61,6 +62,23 @@ def get_app():
         response = {'message': f'Transaction will be added to Block {index}'}
 
         # blockgrid.save("blockgrid.pkl")
+
+        return jsonify(response), 200
+
+    @app.route('/transactions/new/unsigned', methods=['POST'])
+    def new_unsigned_transaction():
+        values = request.get_json()
+
+        final = {"index": (0, 0, 0), "data": json.dumps(values)}
+        private_key, _ = load_saved_keys()
+        final["signature"] = sign(private_key, final["data"].encode('utf-8'))
+
+        # Create a new Transaction
+        index = blockgrid.new_transaction(tuple(final['index']), final['data'], final['signature'])
+
+        response = {'message': f'Transaction will be added to Block {index}'}
+
+        print(blockgrid.grid)
 
         return jsonify(response), 200
 
