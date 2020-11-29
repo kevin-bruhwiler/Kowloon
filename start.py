@@ -1,6 +1,8 @@
 import json
 from uuid import uuid4
 from flask import Flask, jsonify, request
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from sign import load_saved_keys, sign
 
@@ -9,6 +11,13 @@ from blockgrid import Blockgrid
 
 def get_app():
     app = Flask(__name__)
+
+    limiter = Limiter(
+        app,
+        key_func=get_remote_address,
+        default_limits=["200 per day", "50 per hour"]
+    )
+
     node_identifier = str(uuid4()).replace('-', '')
     blockgrid = Blockgrid()
 
@@ -16,6 +25,7 @@ def get_app():
     #    blockgrid.load("blockgrid.pkl")
 
     @app.route('/mine', methods=['GET'])
+    @limiter.limit("20 per hour")
     def mine():
         # We run the proof of work algorithm to get the next proof...
         values = request.get_json()
@@ -78,11 +88,24 @@ def get_app():
 
         response = {'message': f'Transaction will be added to Block {index}'}
 
-        print(blockgrid.grid)
+        return jsonify(response), 200
 
+    @app.route('/grid/index', methods=['GET'])
+    @limiter.limit("50 per hour")
+    def data_at_index():
+        values = request.get_json()
+
+        required = ['index']
+        if not all(k in values for k in required):
+            return 'Missing values', 400
+
+        response = {
+            'data': blockgrid.grid[tuple(values['index'])]
+        }
         return jsonify(response), 200
 
     @app.route('/grid', methods=['GET'])
+    @limiter.limit("10 per hour")
     def full_grid():
         response = {
             'grid': {":".join(map(str, k)): v for k, v in blockgrid.grid.items()},
@@ -91,6 +114,7 @@ def get_app():
         return jsonify(response), 200
 
     @app.route('/grid/compare', methods=['GET'])
+    @limiter.limit("10 per hour")
     def compare_grids():
         values = request.get_json()
 
@@ -102,6 +126,7 @@ def get_app():
         return jsonify(response), 200
 
     @app.route('/grid/replace', methods=['PUT'])
+    @limiter.limit("10 per hour")
     def replace_grid():
         values = request.get_json()
 
@@ -114,6 +139,7 @@ def get_app():
         return jsonify(response), 200
 
     @app.route('/grid/update', methods=['GET'])
+    @limiter.limit("10 per hour")
     def update_grids():
         values = request.get_json()
 
@@ -126,6 +152,7 @@ def get_app():
         return jsonify(response), 200
 
     @app.route('/nodes/register', methods=['POST'])
+    @limiter.limit("10 per hour")
     def register_nodes():
         values = request.get_json()
 
@@ -140,9 +167,10 @@ def get_app():
             'message': 'New nodes have been added',
             'total_nodes': list(blockgrid.nodes),
         }
-        return jsonify(response), 201
+        return jsonify(response), 200
 
     @app.route('/nodes/resolve', methods=['GET'])
+    @limiter.limit("10 per hour")
     def consensus():
         replaced = blockgrid.resolve_conflicts()
 
