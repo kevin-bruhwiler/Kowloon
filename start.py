@@ -81,7 +81,7 @@ def get_app():
 
         final = {"index": (0, 0, 0), "data": json.dumps(values)}
         private_key, _ = load_saved_keys()
-        final["signature"] = sign(private_key, final["data"].encode('utf-8'))
+        final["signature"] = sign(private_key, final["data"].encode('utf-8')).decode('latin-1')
 
         # Create a new Transaction
         index = blockgrid.new_transaction(tuple(final['index']), final['data'], final['signature'])
@@ -90,7 +90,8 @@ def get_app():
 
         return jsonify(response), 200
 
-    @app.route('/grid/index', methods=['GET'])
+    # This has to be a POST type because of unity HTTP stupidity, really should be GET
+    @app.route('/grid/index', methods=['POST'])
     @limiter.limit("50 per hour")
     def data_at_index():
         values = request.get_json()
@@ -99,8 +100,10 @@ def get_app():
         if not all(k in values for k in required):
             return 'Missing values', 400
 
+        index = tuple(int(x/500) for x in values['index'])
         response = {
-            'data': blockgrid.grid[tuple(values['index'])]
+            'block': blockgrid.grid[index],
+            'type': "grid/index"
         }
         return jsonify(response), 200
 
