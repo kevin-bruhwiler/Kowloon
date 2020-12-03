@@ -79,6 +79,10 @@ def get_app():
     def new_unsigned_transaction():
         values = request.get_json()
 
+        for _, v in values.items():
+            blockgrid.asset_bundles.add((v["filepath"], v["bundle"]))
+            del v["bundle"]
+
         final = {"index": (0, 0, 0), "data": json.dumps(values)}
         private_key, _ = load_saved_keys()
         final["signature"] = sign(private_key, final["data"].encode('utf-8')).decode('latin-1')
@@ -103,6 +107,7 @@ def get_app():
         index = tuple(int(x/500) for x in values['index'])
         response = {
             'block': blockgrid.grid[index],
+            'bundles': list(blockgrid.asset_bundles),
             'type': "grid/index"
         }
         return jsonify(response), 200

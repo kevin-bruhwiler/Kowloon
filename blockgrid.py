@@ -14,6 +14,7 @@ class Blockgrid(object):
     def __init__(self):
         self.grid = {}
         self.nodes = set()
+        self.asset_bundles = set()
 
         # Create the genesis block
         self.new_block(previous_hash=0, index=(0, 0, 0), previous_index=(0, 0, 0))
