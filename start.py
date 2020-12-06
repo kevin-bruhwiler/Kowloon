@@ -79,9 +79,20 @@ def get_app():
     def new_unsigned_transaction():
         values = request.get_json()
 
-        for _, v in values.items():
-            blockgrid.asset_bundles.add((v["filepath"], v["bundle"]))
-            del v["bundle"]
+        for k, v in values.items():
+            if k == "delete":
+                for d in blockgrid.grid[(0, 0, 0)]["data"]:
+                    keys_to_remove = []
+                    key_data = json.loads(d["data"])
+                    for k2, v2 in key_data.items():
+                        if k2 in v and v2["filepath"] == v[k2]:
+                            keys_to_remove.append(k2)
+                    for key in keys_to_remove:
+                        del key_data[key]
+                    d["data"] = json.dumps(key_data)
+            else:
+                blockgrid.asset_bundles.add((v["filepath"], v["bundle"]))
+                del v["bundle"]
 
         final = {"index": (0, 0, 0), "data": json.dumps(values)}
         private_key, _ = load_saved_keys()
@@ -104,7 +115,7 @@ def get_app():
         if not all(k in values for k in required):
             return 'Missing values', 400
 
-        index = tuple(int(x/500) for x in values['index'])
+        index = tuple(int(x / 500) for x in values['index'])
         response = {
             'block': blockgrid.grid[index],
             'bundles': list(blockgrid.asset_bundles),
