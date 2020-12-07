@@ -1,4 +1,5 @@
 import json
+import time
 from uuid import uuid4
 from flask import Flask, jsonify, request
 from flask_limiter import Limiter
@@ -78,30 +79,42 @@ def get_app():
     @app.route('/transactions/new/unsigned', methods=['POST'])
     def new_unsigned_transaction():
         values = request.get_json()
+        millis = int(round(time.time() * 1000))
 
         for k, v in values.items():
             if k == "delete":
-                for d in blockgrid.grid[(0, 0, 0)]["data"]:
-                    keys_to_remove = []
-                    key_data = json.loads(d["data"])
-                    for k2, v2 in key_data.items():
-                        if k2 in v and v2["filepath"] == v[k2]:
-                            keys_to_remove.append(k2)
-                    for key in keys_to_remove:
-                        del key_data[key]
-                    d["data"] = json.dumps(key_data)
+                indexes = [v2 for _, v2 in v.items()]
+                for ix in indexes:
+                    for d in blockgrid.grid[tuple(int(x / 500) for x in ix)]["data"]:
+                        keys_to_remove = []
+                        key_data = json.loads(d["data"])
+                        for k2, v2 in key_data.items():
+                            if "filepath" in v2 and k2+","+v2["filepath"] in v:
+                                keys_to_remove.append(k2)
+                        for key in keys_to_remove:
+                            del key_data[key]
+                        d["data"] = json.dumps(key_data)
             else:
-                blockgrid.asset_bundles.add((v["filepath"], v["bundle"]))
+                blockgrid.asset_bundles[millis] = (v["filepath"], v["bundle"])
                 del v["bundle"]
 
-        final = {"index": (0, 0, 0), "data": json.dumps(values)}
-        private_key, _ = load_saved_keys()
-        final["signature"] = sign(private_key, final["data"].encode('utf-8')).decode('latin-1')
+        indexes = {tuple(int(x / 500) for x in v["position"]): {} for _, v in values.items() if "position" in v}
+        for k, v in values.items():
+            if "position" in v:
+                loc = tuple(int(x / 500) for x in v["position"])
+                indexes[loc][k] = v
 
-        # Create a new Transaction
-        index = blockgrid.new_transaction(tuple(final['index']), final['data'], final['signature'])
+        blocks = []
+        for k, v in indexes.items():
+            final = {"index": k, "data": json.dumps(v), "time": millis}
+            private_key, _ = load_saved_keys()
+            final["signature"] = sign(private_key, final["data"].encode('utf-8')).decode('latin-1')
 
-        response = {'message': f'Transaction will be added to Block {index}'}
+            # Create a new Transaction
+            index = blockgrid.new_transaction(tuple(final['index']), final['data'], final['signature'], final["time"])
+            blocks.append(index)
+
+        response = {'message': f'Transaction will be added to regions {blocks}'}
 
         return jsonify(response), 200
 
@@ -111,14 +124,14 @@ def get_app():
     def data_at_index():
         values = request.get_json()
 
-        required = ['index']
+        required = ['index', 'time']
         if not all(k in values for k in required):
             return 'Missing values', 400
 
         index = tuple(int(x / 500) for x in values['index'])
         response = {
-            'block': blockgrid.grid[index],
-            'bundles': list(blockgrid.asset_bundles),
+            'block': blockgrid.grid[index]["data"], #[x for x in blockgrid.grid[index]["data"] if x["updated"] > values['time']],
+            'bundles': [v for k, v in blockgrid.asset_bundles.items() if k > values['time']],
             'type': "grid/index"
         }
         return jsonify(response), 200

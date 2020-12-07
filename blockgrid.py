@@ -14,7 +14,7 @@ class Blockgrid(object):
     def __init__(self):
         self.grid = {}
         self.nodes = set()
-        self.asset_bundles = set()
+        self.asset_bundles = dict()
 
         # Create the genesis block
         self.new_block(previous_hash=0, index=(0, 0, 0), previous_index=(0, 0, 0))
@@ -42,7 +42,7 @@ class Blockgrid(object):
         self.grid[index] = block
         return block
 
-    def new_transaction(self, index, data, signature):
+    def new_transaction(self, index, data, signature, millis):
         """
         Creates a new transaction to go into the next mined Block
         :param index: <str> Index of the block
@@ -54,9 +54,10 @@ class Blockgrid(object):
         self.grid[index]["data"].append({
             'data': data,
             'signature': signature,
+            'updated': millis
         })
 
-        self.grid[index]["updated"] = time()
+        self.grid[index]["updated"] = millis
 
         return index
 
