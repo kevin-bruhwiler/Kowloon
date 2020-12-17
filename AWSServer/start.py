@@ -1,7 +1,10 @@
 import json
 import time
+
+from decimal import Decimal
 import boto3
 from boto3.dynamodb.conditions import Key
+
 from uuid import uuid4
 from flask import Flask, jsonify, request
 from flask_limiter import Limiter
@@ -45,13 +48,34 @@ def create_asset_table(dynamodb=None):
             'WriteCapacityUnits': 10
         }
     )
+
+    table = dynamodb.create_table(
+        TableName='Grid',
+        KeySchema=[
+            {
+                'AttributeName': 'index',
+                'KeyType': 'HASH'
+            },
+        ],
+        AttributeDefinitions=[
+            {
+                'AttributeName': 'index',
+                'AttributeType': 'S'
+            },
+        ],
+        ProvisionedThroughput={
+            'ReadCapacityUnits': 10,
+            'WriteCapacityUnits': 10
+        }
+    )
     return table
 
 
 dynamodb_client = boto3.client('dynamodb')
 dynamodb = boto3.resource('dynamodb', endpoint_url="http://localhost:8000")
+# dynamodb.Table('Grid').delete()
 table = dynamodb.Table('Assets')
-table.delete()
+# table.delete()
 try:
     create_asset_table()
 except dynamodb_client.exceptions.ResourceInUseException:
@@ -60,8 +84,16 @@ except dynamodb_client.exceptions.ResourceInUseException:
 table = dynamodb.Table('Assets')
 
 
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return int(obj)
+        return super(DecimalEncoder, self).default(obj)
+
+
 def get_app():
     app = Flask(__name__)
+    app.json_encoder = DecimalEncoder
 
     limiter = Limiter(
         app,
@@ -135,7 +167,7 @@ def get_app():
             if k == "delete":
                 indexes = [v2 for _, v2 in v.items()]
                 for ix in indexes:
-                    for d in blockgrid.grid[tuple(int(x / 500) for x in ix)]["data"]:
+                    for d in blockgrid.grid[tuple(int(x / 100) for x in ix)]["data"]:
                         keys_to_remove = []
                         key_data = json.loads(d["data"])
                         for k2, v2 in key_data.items():
@@ -144,11 +176,19 @@ def get_app():
                         for key in keys_to_remove:
                             del key_data[key]
                         d["data"] = json.dumps(key_data)
+                        blockgrid.table.put_item(Item={"index": str(tuple(int(x / 100) for x in ix)), "block":
+                            blockgrid.grid[tuple(int(x / 100) for x in ix)]})
             else:
                 # blockgrid.asset_bundles[millis] = (v["filepath"], v["bundle"])
                 chunks, chunk_size = len(v["bundle"]), 150000
-                print(len(v["bundle"]))
                 ix = 0
+
+                # Check if bundle has already been stored
+                result = table.query(KeyConditionExpression=Key('name').eq(v["filepath"] + "_" + str(ix)))
+                if len(result) != 0:
+                    del v["bundle"]
+                    continue
+
                 for i in range(0, chunks, chunk_size):
                     table.put_item(Item={"name": v["filepath"] + "_" + str(ix), "time": millis,
                                          "bundle": v["bundle"][i:i + chunk_size]})
@@ -196,13 +236,14 @@ def get_app():
                         bundle = ""
                         while True:
                             out = table.query(KeyConditionExpression=Key('time').gt(values['time']) &
-                                                                     Key("name").eq(name+"_"+str(ix)))['Items']
+                                                                     Key("name").eq(name + "_" + str(ix)))['Items']
                             if len(out) == 0:
                                 break
                             bundle += out[0]["bundle"]
                             ix += 1
                         if bundle != "":
                             bundles.append((name, bundle))
+
         response = {
             'block': blockgrid.grid[index]["data"],
             # [x for x in blockgrid.grid[index]["data"] if x["updated"] > values['time']],

@@ -3,6 +3,10 @@ import json
 import math
 import requests
 import pickle
+import sys
+
+import boto3
+from boto3.dynamodb.conditions import Key
 
 from time import time
 from urllib.parse import urlparse
@@ -12,12 +16,31 @@ from AWSServer.sign import verify
 
 class Blockgrid(object):
     def __init__(self):
-        self.grid = {}
+        self.dynamodb = boto3.resource('dynamodb', endpoint_url="http://localhost:8000")
+        self.table = self.dynamodb.Table('Grid')
+        self.grid = self.load_grid()
         self.nodes = set()
         self.asset_bundles = dict()
 
         # Create the genesis block
-        self.new_block(previous_hash=0, index=(0, 0, 0), previous_index=(0, 0, 0))
+        if len(self.grid) == 0:
+            self.new_block(previous_hash=0, index=(0, 0, 0), previous_index=(0, 0, 0))
+
+    def load_grid(self):
+        """
+        Read the grid from dynamodb
+        :return: <dict> The grid
+        """
+        grid = {}
+        for i in range(10):
+            for j in range(10):
+                for k in range(10):
+                    out = self.table.query(KeyConditionExpression=Key('index').eq(str((i, j, k))))['Items']
+                    if len(out) == 0:
+                        break
+
+                    grid[(i, j, k)] = out[0]["block"]
+        return grid
 
     def new_block(self, index, previous_hash, previous_index):
         """
@@ -30,8 +53,8 @@ class Blockgrid(object):
 
         block = {
             'index': tuple(index),
-            'timestamp': time(),
-            'updated': time(),
+            'timestamp': int(time()),
+            'updated': int(time()),
             'data': [],
             'proof': None,
             'owner': None,
@@ -40,6 +63,7 @@ class Blockgrid(object):
         }
 
         self.grid[index] = block
+        self.table.put_item(Item={"index": str(index), "block": block})
         return block
 
     def new_transaction(self, index, data, signature, millis):
@@ -58,6 +82,10 @@ class Blockgrid(object):
         })
 
         self.grid[index]["updated"] = millis
+        for item in self.grid[index]["data"]:
+            for k, v in item.items():
+                print(k, sys.getsizeof(v))
+        self.table.put_item(Item={"index": str(index), "block": self.grid[index]})
 
         return index
 
@@ -71,6 +99,7 @@ class Blockgrid(object):
         """
         self.grid[index]["owner"] = owner
         self.grid[index]["proof"] = proof
+        self.table.put_item(Item={"index": str(index), "block": self.grid[index]})
         previous_hash = self.hash(self.grid[index])
 
         # Add adjacent unsigned blocks
@@ -119,9 +148,11 @@ class Blockgrid(object):
                         if block["updated"] > longer_grid[idx]["updated"]:
                             longer_grid[idx]["data"] = block["data"]
                             longer_grid[idx]["updated"] = block["updated"]
+                            self.table.put_item(Item={"index": str(idx), "block": longer_grid[idx]})
             # If the block is not in our grid, but is in the shorter valid grid
             else:
                 longer_grid[idx] = block
+                self.table.put_item(Item={"index": str(idx), "block": block})
         return longer_grid
 
     def valid_gird(self, other_grid):
@@ -231,8 +262,9 @@ class Blockgrid(object):
         """
 
         # We must make sure that the Dictionary is Ordered, or we'll have inconsistent hashes
-        block_string = json.dumps({k: v for k, v in block.items() if k == "owner" and k == "index" and k == "previous_hash"},
-                                  sort_keys=True).encode()
+        block_string = json.dumps(
+            {k: v for k, v in block.items() if k == "owner" and k == "index" and k == "previous_hash"},
+            sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
 
     def last_index(self, index):
