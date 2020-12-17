@@ -7,7 +7,7 @@ import pickle
 from time import time
 from urllib.parse import urlparse
 
-from sign import verify
+from AWSServer.sign import verify
 
 
 class Blockgrid(object):

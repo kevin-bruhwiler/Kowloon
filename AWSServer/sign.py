@@ -6,7 +6,7 @@ import base64
 
 
 def rsakeys():
-    length = 4096
+    length = 2048
     private_key = RSA.generate(length, Random.new().read)
     public_key = private_key.publickey()
     return private_key, public_key
@@ -27,18 +27,18 @@ def verify(public_key, data, signature):
 def generate_keys():
     private_key, public_key = rsakeys()
 
-    with open("private.pem", "wb") as prv_file:
+    with open("./private.pem", "wb") as prv_file:
         prv_file.write(private_key.exportKey())
 
-    with open("public.pem", "wb") as pub_file:
+    with open("../public.pem", "wb") as pub_file:
         pub_file.write(public_key.exportKey())
 
 
 def load_saved_keys():
-    with open("private.pem", "rb") as prv_file:
+    with open("./private.pem", "rb") as prv_file:
         private_key = RSA.importKey(prv_file.read())
 
-    with open("public.pem", "rb") as pub_file:
+    with open("./public.pem", "rb") as pub_file:
         public_key = RSA.importKey(pub_file.read())
 
     return private_key, public_key

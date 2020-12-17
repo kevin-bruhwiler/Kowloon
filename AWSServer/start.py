@@ -1,13 +1,63 @@
 import json
 import time
+import boto3
+from boto3.dynamodb.conditions import Key
 from uuid import uuid4
 from flask import Flask, jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-from sign import load_saved_keys, sign
+from AWSServer.sign import load_saved_keys, sign
 
-from blockgrid import Blockgrid
+from AWSServer.blockgrid import Blockgrid
+
+
+def create_asset_table(dynamodb=None):
+    if not dynamodb:
+        dynamodb = boto3.resource('dynamodb', endpoint_url="http://localhost:8000", region_name='us-west-2',
+                                  aws_access_key_id="silly1",
+                                  aws_secret_access_key="silly2")
+
+    table = dynamodb.create_table(
+        TableName='Assets',
+        KeySchema=[
+            {
+                'AttributeName': 'name',
+                'KeyType': 'HASH'
+            },
+            {
+                'AttributeName': 'time',
+                'KeyType': 'RANGE'
+            },
+        ],
+        AttributeDefinitions=[
+            {
+                'AttributeName': 'name',
+                'AttributeType': 'S'
+            },
+            {
+                'AttributeName': 'time',
+                'AttributeType': 'N'
+            },
+        ],
+        ProvisionedThroughput={
+            'ReadCapacityUnits': 10,
+            'WriteCapacityUnits': 10
+        }
+    )
+    return table
+
+
+dynamodb_client = boto3.client('dynamodb')
+dynamodb = boto3.resource('dynamodb', endpoint_url="http://localhost:8000")
+table = dynamodb.Table('Assets')
+table.delete()
+try:
+    create_asset_table()
+except dynamodb_client.exceptions.ResourceInUseException:
+    pass
+
+table = dynamodb.Table('Assets')
 
 
 def get_app():
@@ -89,13 +139,20 @@ def get_app():
                         keys_to_remove = []
                         key_data = json.loads(d["data"])
                         for k2, v2 in key_data.items():
-                            if "filepath" in v2 and k2+","+v2["filepath"] in v:
+                            if "filepath" in v2 and k2 + "," + v2["filepath"] in v:
                                 keys_to_remove.append(k2)
                         for key in keys_to_remove:
                             del key_data[key]
                         d["data"] = json.dumps(key_data)
             else:
-                blockgrid.asset_bundles[millis] = (v["filepath"], v["bundle"])
+                # blockgrid.asset_bundles[millis] = (v["filepath"], v["bundle"])
+                chunks, chunk_size = len(v["bundle"]), 150000
+                print(len(v["bundle"]))
+                ix = 0
+                for i in range(0, chunks, chunk_size):
+                    table.put_item(Item={"name": v["filepath"] + "_" + str(ix), "time": millis,
+                                         "bundle": v["bundle"][i:i + chunk_size]})
+                    ix += 1
                 del v["bundle"]
 
         indexes = {tuple(int(x / 500) for x in v["position"]): {} for _, v in values.items() if "position" in v}
@@ -129,9 +186,28 @@ def get_app():
             return 'Missing values', 400
 
         index = tuple(int(x / 500) for x in values['index'])
+        bundles = []
+        for item in blockgrid.grid[index]["data"]:
+            for k, v in item.items():
+                if k == "data":
+                    for k2, v2, in json.loads(v).items():
+                        name = v2["filepath"]
+                        ix = 0
+                        bundle = ""
+                        while True:
+                            out = table.query(KeyConditionExpression=Key('time').gt(values['time']) &
+                                                                     Key("name").eq(name+"_"+str(ix)))['Items']
+                            if len(out) == 0:
+                                break
+                            bundle += out[0]["bundle"]
+                            ix += 1
+                        if bundle != "":
+                            bundles.append((name, bundle))
         response = {
-            'block': blockgrid.grid[index]["data"], #[x for x in blockgrid.grid[index]["data"] if x["updated"] > values['time']],
-            'bundles': [v for k, v in blockgrid.asset_bundles.items() if k > values['time']],
+            'block': blockgrid.grid[index]["data"],
+            # [x for x in blockgrid.grid[index]["data"] if x["updated"] > values['time']],
+            # 'bundles': [v for k, v in blockgrid.asset_bundles.items() if k > values['time']],
+            'bundles': bundles,
             'type': "grid/index"
         }
         return jsonify(response), 200
