@@ -1,5 +1,5 @@
 import unittest
-from AWSServer.start import get_app
+from start import get_app
 import json
 
 
