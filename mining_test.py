@@ -1,6 +1,5 @@
 import unittest
-from start import get_app
-from sign import rsakeys
+from AWSServer.start import get_app
 import json
 
 
