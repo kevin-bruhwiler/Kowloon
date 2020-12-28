@@ -11,12 +11,16 @@ from boto3.dynamodb.conditions import Key
 from time import time
 from urllib.parse import urlparse
 
-from AWSServer.sign import verify
+from sign import verify
 
 
 class Blockgrid(object):
     def __init__(self):
-        self.dynamodb = boto3.resource('dynamodb', endpoint_url="http://localhost:8000")
+        with open("accesskey", "r") as ak, open("./secretkey", "r") as sk:
+            self.dynamodb = boto3.resource('dynamodb', endpoint_url="https://dynamodb.us-east-2.amazonaws.com",
+                                           region_name='us-east-2',
+                                           aws_access_key_id=ak.read(),
+                                           aws_secret_access_key=sk.read())
         self.table = self.dynamodb.Table('Grid')
         self.grid = self.load_grid()
         self.nodes = set()

@@ -1,25 +1,36 @@
 import json
+import sys
 import time
+import atexit
+import io
+
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from decimal import Decimal
 import boto3
 from boto3.dynamodb.conditions import Key
 
 from uuid import uuid4
-from flask import Flask, jsonify, request
+import flask
+from flask import Flask, jsonify, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-from AWSServer.sign import load_saved_keys, sign
+from requests_toolbelt import MultipartEncoder
+import zipfile
 
-from AWSServer.blockgrid import Blockgrid
+from sign import load_saved_keys, sign
+
+from blockgrid import Blockgrid
 
 
 def create_asset_table(dynamodb=None):
     if not dynamodb:
-        dynamodb = boto3.resource('dynamodb', endpoint_url="http://localhost:8000", region_name='us-west-2',
-                                  aws_access_key_id="silly1",
-                                  aws_secret_access_key="silly2")
+        with open("accesskey", "r") as ak, open("./secretkey", "r") as sk:
+            dynamodb = boto3.resource('dynamodb', endpoint_url="https://dynamodb.us-east-2.amazonaws.com",
+                                      region_name='us-east-2',
+                                      aws_access_key_id=ak.read(),
+                                      aws_secret_access_key=sk.read())
 
     table = dynamodb.create_table(
         TableName='Assets',
@@ -71,11 +82,15 @@ def create_asset_table(dynamodb=None):
     return table
 
 
-dynamodb_client = boto3.client('dynamodb')
-dynamodb = boto3.resource('dynamodb', endpoint_url="http://localhost:8000")
-# dynamodb.Table('Grid').delete()
-table = dynamodb.Table('Assets')
-# table.delete()
+dynamodb_client = boto3.client('dynamodb', region_name='us-east-2')
+with open("accesskey", "r") as ak, open("./secretkey", "r") as sk:
+    dynamodb = boto3.resource('dynamodb', endpoint_url="https://dynamodb.us-east-2.amazonaws.com",
+                              region_name='us-east-2',
+                              aws_access_key_id=ak.read(),
+                              aws_secret_access_key=sk.read())
+#dynamodb.Table('Grid').delete()
+#table = dynamodb.Table('Assets')
+#table.delete()
 try:
     create_asset_table()
 except dynamodb_client.exceptions.ResourceInUseException:
@@ -92,17 +107,48 @@ class DecimalEncoder(json.JSONEncoder):
 
 
 def get_app():
-    app = Flask(__name__)
+    application = app = Flask(__name__)
     app.json_encoder = DecimalEncoder
 
     limiter = Limiter(
         app,
         key_func=get_remote_address,
-        default_limits=["200 per day", "50 per hour"]
+        #default_limits=["200 per day", "50 per hour"]
     )
 
     node_identifier = str(uuid4()).replace('-', '')
     blockgrid = Blockgrid()
+
+    def remove_unused_bundles():
+        filepaths = set()
+        for index, _ in blockgrid.grid.items():
+            for item in blockgrid.grid[index]["data"]:
+                for k, v in item.items():
+                    if k == "data":
+                        for k2, v2, in json.loads(v).items():
+                            filepaths.add(v2["filepath"])
+
+        scan_kwargs = {
+            'ProjectionExpression': "name",
+        }
+        done = False
+        start_key = None
+        while not done:
+            if start_key:
+                scan_kwargs['ExclusiveStartKey'] = start_key
+            response = table.scan(**scan_kwargs)
+            for item in response.get('Items', []):
+                if item["name"] not in filepaths:
+                    table.delete_item(Key={"name": item["name"]})
+            start_key = response.get('LastEvaluatedKey', None)
+            done = start_key is None
+
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(func=remove_unused_bundles, trigger="interval", days=3)
+    scheduler.start()
+
+    # Shut down the scheduler when exiting the app
+    atexit.register(lambda: scheduler.shutdown())
 
     # if os.path.isfile("./blockgrid.pkl"):
     #    blockgrid.load("blockgrid.pkl")
@@ -140,6 +186,10 @@ def get_app():
 
         return jsonify(response), 200
 
+    @app.route('/', methods=['GET'])
+    def check():
+        return jsonify({}), 200
+
     @app.route('/transactions/new', methods=['POST'])
     def new_transaction():
         values = request.get_json()
@@ -159,9 +209,25 @@ def get_app():
         return jsonify(response), 200
 
     @app.route('/transactions/new/unsigned', methods=['POST'])
+    @limiter.limit("12 per hour")
     def new_unsigned_transaction():
-        values = request.get_json()
         millis = int(round(time.time() * 1000))
+        values = json.loads(request.form.to_dict()[None])
+
+        for k, v in request.files.to_dict().items():
+            bundle = v.read()
+            chunks, chunk_size = len(bundle) // 400000, 400000
+            ix = 0
+
+            # Check if bundle has already been stored
+            result = table.query(KeyConditionExpression=Key('name').eq(k + "_" + str(ix)))
+            if len(result["Items"]) != 0:
+                continue
+
+            for i in range(0, chunks, chunk_size):
+                table.put_item(Item={"name": k + "_" + str(ix), "time": millis,
+                                     "bundle": bundle[i:i + chunk_size]})
+                ix += 1
 
         for k, v in values.items():
             if k == "delete":
@@ -178,27 +244,11 @@ def get_app():
                         d["data"] = json.dumps(key_data)
                         blockgrid.table.put_item(Item={"index": str(tuple(int(x / 100) for x in ix)), "block":
                             blockgrid.grid[tuple(int(x / 100) for x in ix)]})
-            else:
-                # blockgrid.asset_bundles[millis] = (v["filepath"], v["bundle"])
-                chunks, chunk_size = len(v["bundle"]), 150000
-                ix = 0
 
-                # Check if bundle has already been stored
-                result = table.query(KeyConditionExpression=Key('name').eq(v["filepath"] + "_" + str(ix)))
-                if len(result) != 0:
-                    del v["bundle"]
-                    continue
-
-                for i in range(0, chunks, chunk_size):
-                    table.put_item(Item={"name": v["filepath"] + "_" + str(ix), "time": millis,
-                                         "bundle": v["bundle"][i:i + chunk_size]})
-                    ix += 1
-                del v["bundle"]
-
-        indexes = {tuple(int(x / 500) for x in v["position"]): {} for _, v in values.items() if "position" in v}
+        indexes = {tuple(int(x / 100) for x in v["position"]): {} for _, v in values.items() if "position" in v}
         for k, v in values.items():
             if "position" in v:
-                loc = tuple(int(x / 500) for x in v["position"])
+                loc = tuple(int(x / 100) for x in v["position"])
                 indexes[loc][k] = v
 
         blocks = []
@@ -217,7 +267,7 @@ def get_app():
 
     # This has to be a POST type because of unity HTTP stupidity, really should be GET
     @app.route('/grid/index', methods=['POST'])
-    @limiter.limit("50 per hour")
+    @limiter.limit("12 per hour")
     def data_at_index():
         values = request.get_json()
 
@@ -225,33 +275,54 @@ def get_app():
         if not all(k in values for k in required):
             return 'Missing values', 400
 
-        index = tuple(int(x / 500) for x in values['index'])
-        bundles = []
-        for item in blockgrid.grid[index]["data"]:
-            for k, v in item.items():
-                if k == "data":
-                    for k2, v2, in json.loads(v).items():
-                        name = v2["filepath"]
-                        ix = 0
-                        bundle = ""
-                        while True:
-                            out = table.query(KeyConditionExpression=Key('time').gt(values['time']) &
-                                                                     Key("name").eq(name + "_" + str(ix)))['Items']
-                            if len(out) == 0:
-                                break
-                            bundle += out[0]["bundle"]
-                            ix += 1
-                        if bundle != "":
-                            bundles.append((name, bundle))
+        index = tuple(int(x / 100) for x in values['index'])
 
         response = {
-            'block': blockgrid.grid[index]["data"],
-            # [x for x in blockgrid.grid[index]["data"] if x["updated"] > values['time']],
-            # 'bundles': [v for k, v in blockgrid.asset_bundles.items() if k > values['time']],
-            'bundles': bundles,
-            'type': "grid/index"
+            'block': blockgrid.grid[index]["data"]
         }
         return jsonify(response), 200
+
+    # This has to be a POST type because of unity HTTP stupidity, really should be GET
+    @app.route('/grid/index/bundles', methods=['POST'])
+    @limiter.limit("12 per hour")
+    def bundles_at_index():
+        values = request.get_json()
+
+        required = ['index', 'time']
+        if not all(k in values for k in required):
+            return 'Missing values', 400
+
+        index = tuple(int(x / 100) for x in values['index'])
+        zb = io.BytesIO()
+        bundles = set()
+        with zipfile.ZipFile(zb, "a", zipfile.ZIP_DEFLATED, False) as zippedBundles:
+            for item in blockgrid.grid[index]["data"]:
+                for k, v in item.items():
+                    if k == "data":
+                        for k2, v2, in json.loads(v).items():
+                            name = v2["filepath"]
+                            ix = 0
+                            bundle = b""
+                            while True and name not in bundles:
+                                out = table.query(KeyConditionExpression=Key('time').gt(values['time']) &
+                                                                         Key("name").eq(name + "_" + str(ix)))['Items']
+                                if len(out) == 0:
+                                    break
+                                bundle += out[0]["bundle"].value
+                                ix += 1
+
+                            if len(bundle) > 0:
+                                bundles.add(name)
+                                zippedBundles.writestr(name, io.BytesIO(bundle).getvalue(),
+                                                       compress_type=zipfile.ZIP_DEFLATED)
+
+        zb.seek(0)
+        return send_file(
+            io.BytesIO(zb.read()),
+            attachment_filename="grid/index",
+            mimetype='application/octet-stream',
+            as_attachment=True
+        )
 
     @app.route('/grid', methods=['GET'])
     @limiter.limit("10 per hour")
@@ -339,6 +410,7 @@ def get_app():
     return app
 
 
-if __name__ == '__main__':
-    app = get_app()
-    app.run(host='0.0.0.0', port=5000)
+application = get_app()
+if __name__ == "__main__":
+    application.run()
+# app.run(host='0.0.0.0', port=5000)
