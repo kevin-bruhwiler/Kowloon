@@ -55,8 +55,8 @@ def create_asset_table(dynamodb=None):
             },
         ],
         ProvisionedThroughput={
-            'ReadCapacityUnits': 10,
-            'WriteCapacityUnits': 10
+            'ReadCapacityUnits': 20,
+            'WriteCapacityUnits': 20
         }
     )
 
@@ -75,8 +75,8 @@ def create_asset_table(dynamodb=None):
             },
         ],
         ProvisionedThroughput={
-            'ReadCapacityUnits': 10,
-            'WriteCapacityUnits': 10
+            'ReadCapacityUnits': 5,
+            'WriteCapacityUnits': 5
         }
     )
     return table
@@ -215,8 +215,6 @@ def get_app():
         values = json.loads(request.form.to_dict()[None])
 
         for k, v in request.files.to_dict().items():
-            bundle = v.read()
-            chunks, chunk_size = len(bundle) // 400000, 400000
             ix = 0
 
             # Check if bundle has already been stored
@@ -224,10 +222,16 @@ def get_app():
             if len(result["Items"]) != 0:
                 continue
 
-            for i in range(0, chunks, chunk_size):
-                table.put_item(Item={"name": k + "_" + str(ix), "time": millis,
-                                     "bundle": bundle[i:i + chunk_size]})
+            bundle = v.read()
+            print(len(bundle))
+            x = 400000
+            chunks = [bundle[y - x:y] for y in range(x, len(bundle) + x, x)]
+            print(len(chunks))
+
+            for chunk in chunks:
+                table.put_item(Item={"name": k + "_" + str(ix), "time": millis, "bundle": chunk})
                 ix += 1
+                time.sleep(1.0)
 
         for k, v in values.items():
             if k == "delete":
@@ -309,6 +313,7 @@ def get_app():
                                 if len(out) == 0:
                                     break
                                 bundle += out[0]["bundle"].value
+                                print(len(bundle))
                                 ix += 1
 
                             if len(bundle) > 0:
@@ -318,7 +323,7 @@ def get_app():
 
         zb.seek(0)
         return send_file(
-            io.BytesIO(zb.read()),
+            zb,
             attachment_filename="grid/index",
             mimetype='application/octet-stream',
             as_attachment=True
