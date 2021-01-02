@@ -1,5 +1,4 @@
 import json
-import sys
 import time
 import atexit
 import io
@@ -11,12 +10,10 @@ import boto3
 from boto3.dynamodb.conditions import Key
 
 from uuid import uuid4
-import flask
 from flask import Flask, jsonify, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-from requests_toolbelt import MultipartEncoder
 import zipfile
 
 from sign import load_saved_keys, sign
@@ -154,7 +151,7 @@ def get_app():
     #    blockgrid.load("blockgrid.pkl")
 
     @app.route('/mine', methods=['GET'])
-    @limiter.limit("20 per hour")
+    @limiter.limit("1 per hour")
     def mine():
         # We run the proof of work algorithm to get the next proof...
         values = request.get_json()
@@ -187,10 +184,12 @@ def get_app():
         return jsonify(response), 200
 
     @app.route('/', methods=['GET'])
+    @limiter.limit("3 per hour")
     def check():
         return jsonify({}), 200
 
     @app.route('/transactions/new', methods=['POST'])
+    @limiter.limit("3 per hour")
     def new_transaction():
         values = request.get_json()
 
@@ -209,7 +208,7 @@ def get_app():
         return jsonify(response), 200
 
     @app.route('/transactions/new/unsigned', methods=['POST'])
-    @limiter.limit("12 per hour")
+    @limiter.limit("3 per hour")
     def new_unsigned_transaction():
         millis = int(round(time.time() * 1000))
         values = json.loads(request.form.to_dict()[None])
@@ -223,10 +222,8 @@ def get_app():
                 continue
 
             bundle = v.read()
-            print(len(bundle))
             x = 400000
             chunks = [bundle[y - x:y] for y in range(x, len(bundle) + x, x)]
-            print(len(chunks))
 
             for chunk in chunks:
                 table.put_item(Item={"name": k + "_" + str(ix), "time": millis, "bundle": chunk})
@@ -271,7 +268,7 @@ def get_app():
 
     # This has to be a POST type because of unity HTTP stupidity, really should be GET
     @app.route('/grid/index', methods=['POST'])
-    @limiter.limit("12 per hour")
+    @limiter.limit("3 per hour")
     def data_at_index():
         values = request.get_json()
 
@@ -288,7 +285,7 @@ def get_app():
 
     # This has to be a POST type because of unity HTTP stupidity, really should be GET
     @app.route('/grid/index/bundles', methods=['POST'])
-    @limiter.limit("12 per hour")
+    @limiter.limit("3 per hour")
     def bundles_at_index():
         values = request.get_json()
 
@@ -313,7 +310,6 @@ def get_app():
                                 if len(out) == 0:
                                     break
                                 bundle += out[0]["bundle"].value
-                                print(len(bundle))
                                 ix += 1
 
                             if len(bundle) > 0:
@@ -330,7 +326,7 @@ def get_app():
         )
 
     @app.route('/grid', methods=['GET'])
-    @limiter.limit("10 per hour")
+    @limiter.limit("3 per hour")
     def full_grid():
         response = {
             'grid': {":".join(map(str, k)): v for k, v in blockgrid.grid.items()},
