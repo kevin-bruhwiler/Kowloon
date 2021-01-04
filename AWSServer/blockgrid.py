@@ -8,7 +8,7 @@ import sys
 import boto3
 from boto3.dynamodb.conditions import Key
 
-from time import time
+from time import time, sleep
 from urllib.parse import urlparse
 
 from sign import verify
@@ -39,12 +39,35 @@ class Blockgrid(object):
         for i in range(10):
             for j in range(10):
                 for k in range(10):
-                    out = self.table.query(KeyConditionExpression=Key('index').eq(str((i, j, k))))['Items']
-                    if len(out) == 0:
-                        break
+                    block = ""
+                    ix = 0
+                    while True:
+                        out = self.table.query(KeyConditionExpression=Key('index').eq(str((i, j, k)) + "_" + str(ix)))['Items']
+                        if len(out) == 0:
+                            break
+                        block += out[0]["block"]
+                        ix += 1
 
-                    grid[(i, j, k)] = out[0]["block"]
+                    if len(block) > 0:
+                        grid[(i, j, k)] = json.loads(block)
         return grid
+
+    def save_block(self, idx, block):
+        """
+        Save a block to dynamodb
+        :param idx: <tuple> The index of the block being saved
+        :param block: <string> The contents of the block being saved
+        :return:
+        """
+        x = 400000 // 4
+        block = json.dumps(block)
+        chunks = [block[y - x:y] for y in range(x, len(block) + x, x)]
+        ix = 0
+
+        for chunk in chunks:
+            self.table.put_item(Item={"index": str(idx) + "_" + str(ix), "block": chunk})
+            ix += 1
+            sleep(3.0)
 
     def new_block(self, index, previous_hash, previous_index):
         """
@@ -67,7 +90,7 @@ class Blockgrid(object):
         }
 
         self.grid[index] = block
-        self.table.put_item(Item={"index": str(index), "block": block})
+        self.save_block(index, block)
         return block
 
     def new_transaction(self, index, data, signature, millis):
@@ -89,7 +112,7 @@ class Blockgrid(object):
         for item in self.grid[index]["data"]:
             for k, v in item.items():
                 print(k, sys.getsizeof(v))
-        self.table.put_item(Item={"index": str(index), "block": self.grid[index]})
+        self.save_block(index, self.grid[index])
 
         return index
 
@@ -103,7 +126,7 @@ class Blockgrid(object):
         """
         self.grid[index]["owner"] = owner
         self.grid[index]["proof"] = proof
-        self.table.put_item(Item={"index": str(index), "block": self.grid[index]})
+        self.save_block(index, self.grid[index])
         previous_hash = self.hash(self.grid[index])
 
         # Add adjacent unsigned blocks
@@ -152,11 +175,11 @@ class Blockgrid(object):
                         if block["updated"] > longer_grid[idx]["updated"]:
                             longer_grid[idx]["data"] = block["data"]
                             longer_grid[idx]["updated"] = block["updated"]
-                            self.table.put_item(Item={"index": str(idx), "block": longer_grid[idx]})
+                            self.save_block(idx, longer_grid[idx])
             # If the block is not in our grid, but is in the shorter valid grid
             else:
                 longer_grid[idx] = block
-                self.table.put_item(Item={"index": str(idx), "block": block})
+                self.save_block(idx, block)
         return longer_grid
 
     def valid_gird(self, other_grid):

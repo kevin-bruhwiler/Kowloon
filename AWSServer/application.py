@@ -126,7 +126,8 @@ def get_app():
                             filepaths.add(v2["filepath"])
 
         scan_kwargs = {
-            'ProjectionExpression': "name",
+            'ProjectionExpression': "#n",
+            'ExpressionAttributeNames': {'#n': 'name'}
         }
         done = False
         start_key = None
@@ -184,7 +185,7 @@ def get_app():
         return jsonify(response), 200
 
     @app.route('/', methods=['GET'])
-    @limiter.limit("3 per hour")
+    @limiter.limit("1 per day")
     def check():
         return jsonify({}), 200
 
@@ -228,13 +229,13 @@ def get_app():
             for chunk in chunks:
                 table.put_item(Item={"name": k + "_" + str(ix), "time": millis, "bundle": chunk})
                 ix += 1
-                time.sleep(1.0)
+                time.sleep(3.0)
 
         for k, v in values.items():
             if k == "delete":
                 indexes = [v2 for _, v2 in v.items()]
                 for ix in indexes:
-                    for d in blockgrid.grid[tuple(int(x / 100) for x in ix)]["data"]:
+                    for d in blockgrid.grid[tuple(int(x / 500) for x in ix)]["data"]:
                         keys_to_remove = []
                         key_data = json.loads(d["data"])
                         for k2, v2 in key_data.items():
@@ -243,13 +244,13 @@ def get_app():
                         for key in keys_to_remove:
                             del key_data[key]
                         d["data"] = json.dumps(key_data)
-                        blockgrid.table.put_item(Item={"index": str(tuple(int(x / 100) for x in ix)), "block":
-                            blockgrid.grid[tuple(int(x / 100) for x in ix)]})
+                        blockgrid.table.put_item(Item={"index": str(tuple(int(x / 500) for x in ix)), "block":
+                            blockgrid.grid[tuple(int(x / 500) for x in ix)]})
 
-        indexes = {tuple(int(x / 100) for x in v["position"]): {} for _, v in values.items() if "position" in v}
+        indexes = {tuple(int(x / 500) for x in v["position"]): {} for _, v in values.items() if "position" in v}
         for k, v in values.items():
             if "position" in v:
-                loc = tuple(int(x / 100) for x in v["position"])
+                loc = tuple(int(x / 500) for x in v["position"])
                 indexes[loc][k] = v
 
         blocks = []
@@ -276,7 +277,7 @@ def get_app():
         if not all(k in values for k in required):
             return 'Missing values', 400
 
-        index = tuple(int(x / 100) for x in values['index'])
+        index = tuple(int(x / 500) for x in values['index'])
 
         response = {
             'block': blockgrid.grid[index]["data"]
@@ -293,7 +294,7 @@ def get_app():
         if not all(k in values for k in required):
             return 'Missing values', 400
 
-        index = tuple(int(x / 100) for x in values['index'])
+        index = tuple(int(x / 500) for x in values['index'])
         zb = io.BytesIO()
         bundles = set()
         with zipfile.ZipFile(zb, "a", zipfile.ZIP_DEFLATED, False) as zippedBundles:
