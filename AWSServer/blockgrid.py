@@ -22,6 +22,7 @@ class Blockgrid(object):
                                            aws_access_key_id=ak.read(),
                                            aws_secret_access_key=sk.read())
         self.table = self.dynamodb.Table('Grid')
+        self.dynamodb_client = boto3.client('dynamodb', region_name='us-east-2')
         self.grid = self.load_grid()
         self.nodes = set()
         self.asset_bundles = dict()
@@ -42,7 +43,7 @@ class Blockgrid(object):
                     block = ""
                     ix = 0
                     while True:
-                        out = self.table.query(KeyConditionExpression=Key('index').eq(str((i, j, k)) + "_" + str(ix)))['Items']
+                        out = self.persistent_query(Key('index').eq(str((i, j, k)) + "_" + str(ix)))['Items']
                         if len(out) == 0:
                             break
                         block += out[0]["block"]
@@ -65,9 +66,29 @@ class Blockgrid(object):
         ix = 0
 
         for chunk in chunks:
-            self.table.put_item(Item={"index": str(idx) + "_" + str(ix), "block": chunk})
+            self.persistent_put({"index": str(idx) + "_" + str(ix), "block": chunk})
             ix += 1
             sleep(3.0)
+
+    def persistent_put(self, item):
+        result = None
+        while result is None:
+            try:
+                self.table.put_item(Item=item)
+            except self.dynamodb_client.exceptions.ProvisionedThroughputExceededException:
+                sleep(3.0)
+                continue
+            result = True
+
+    def persistent_query(self, kce):
+        result = None
+        while result is None:
+            try:
+                result = self.table.query(KeyConditionExpression=kce)
+            except self.dynamodb_client.exceptions.ProvisionedThroughputExceededException:
+                sleep(3.0)
+                pass
+        return result
 
     def new_block(self, index, previous_hash, previous_index):
         """
@@ -93,7 +114,7 @@ class Blockgrid(object):
         self.save_block(index, block)
         return block
 
-    def new_transaction(self, index, data, signature, millis):
+    def new_transaction(self, index, data, signature, millis, approved):
         """
         Creates a new transaction to go into the next mined Block
         :param index: <str> Index of the block
@@ -105,7 +126,8 @@ class Blockgrid(object):
         self.grid[index]["data"].append({
             'data': data,
             'signature': signature,
-            'updated': millis
+            'updated': millis,
+            'approved': approved
         })
 
         self.grid[index]["updated"] = millis

@@ -3,6 +3,9 @@ import time
 import atexit
 import io
 
+import steam
+import urllib.request
+
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from decimal import Decimal
@@ -85,9 +88,9 @@ with open("accesskey", "r") as ak, open("./secretkey", "r") as sk:
                               region_name='us-east-2',
                               aws_access_key_id=ak.read(),
                               aws_secret_access_key=sk.read())
-#dynamodb.Table('Grid').delete()
-#table = dynamodb.Table('Assets')
-#table.delete()
+# dynamodb.Table('Grid').delete()
+# table = dynamodb.Table('Assets')
+# table.delete()
 try:
     create_asset_table()
 except dynamodb_client.exceptions.ResourceInUseException:
@@ -110,11 +113,15 @@ def get_app():
     limiter = Limiter(
         app,
         key_func=get_remote_address,
-        #default_limits=["200 per day", "50 per hour"]
+        # default_limits=["200 per day", "50 per hour"]
     )
 
     node_identifier = str(uuid4()).replace('-', '')
+    moderators = set(line.strip() for line in open('moderators'))
     blockgrid = Blockgrid()
+
+    with open('webAPIkey', 'r') as file:
+        apiKey = file.read().replace('\n', '')
 
     def remove_unused_bundles():
         filepaths = set()
@@ -150,6 +157,18 @@ def get_app():
 
     # if os.path.isfile("./blockgrid.pkl"):
     #    blockgrid.load("blockgrid.pkl")
+
+    def is_moderator(ticket):
+        moderator = False
+        try:
+            out = json.loads(
+                urllib.request.urlopen('https://partner.steam-api.com/ISteamUserAuth/AuthenticateUserTicket/v1/?key'
+                                       '=' + apiKey + '&appid=1522520&ticket=' + ticket).read().decode())
+            if "error" not in out["response"]:
+                moderator = out["response"]["params"]["steamid"] in moderators
+        except Exception as e:
+            pass
+        return moderator
 
     @app.route('/mine', methods=['GET'])
     @limiter.limit("1 per hour")
@@ -208,17 +227,39 @@ def get_app():
 
         return jsonify(response), 200
 
+    def persistent_put(item):
+        result = None
+        while result is None:
+            try:
+                table.put_item(Item=item)
+            except dynamodb_client.exceptions.ProvisionedThroughputExceededException:
+                time.sleep(3.0)
+                continue
+            result = True
+
+    def persistent_query(kce):
+        result = None
+        while result is None:
+            try:
+                result = table.query(KeyConditionExpression=kce)
+            except dynamodb_client.exceptions.ProvisionedThroughputExceededException:
+                time.sleep(3.0)
+                pass
+        return result
+
     @app.route('/transactions/new/unsigned', methods=['POST'])
     @limiter.limit("3 per hour")
     def new_unsigned_transaction():
         millis = int(round(time.time() * 1000))
         values = json.loads(request.form.to_dict()[None])
 
+        moderator = is_moderator(values["ticket"])
+
         for k, v in request.files.to_dict().items():
             ix = 0
 
             # Check if bundle has already been stored
-            result = table.query(KeyConditionExpression=Key('name').eq(k + "_" + str(ix)))
+            result = persistent_query(Key('name').eq(k + "_" + str(ix) + "_" + str(moderator)))
             if len(result["Items"]) != 0:
                 continue
 
@@ -227,12 +268,12 @@ def get_app():
             chunks = [bundle[y - x:y] for y in range(x, len(bundle) + x, x)]
 
             for chunk in chunks:
-                table.put_item(Item={"name": k + "_" + str(ix), "time": millis, "bundle": chunk})
+                persistent_put({"name": k + "_" + str(ix) + "_" + str(moderator), "time": millis, "bundle": chunk})
                 ix += 1
                 time.sleep(3.0)
 
         for k, v in values.items():
-            if k == "delete":
+            if moderator and k == "delete":
                 indexes = [v2 for _, v2 in v.items()]
                 for ix in indexes:
                     for d in blockgrid.grid[tuple(int(x / 500) for x in ix)]["data"]:
@@ -244,7 +285,7 @@ def get_app():
                         for key in keys_to_remove:
                             del key_data[key]
                         d["data"] = json.dumps(key_data)
-                        blockgrid.table.put_item(Item={"index": str(tuple(int(x / 500) for x in ix)), "block":
+                        blockgrid.persistent_put({"index": str(tuple(int(x / 500) for x in ix)), "block":
                             blockgrid.grid[tuple(int(x / 500) for x in ix)]})
 
         indexes = {tuple(int(x / 500) for x in v["position"]): {} for _, v in values.items() if "position" in v}
@@ -255,12 +296,13 @@ def get_app():
 
         blocks = []
         for k, v in indexes.items():
-            final = {"index": k, "data": json.dumps(v), "time": millis}
+            final = {"index": k, "approved": moderator, "data": json.dumps(v), "time": millis}
             private_key, _ = load_saved_keys()
             final["signature"] = sign(private_key, final["data"].encode('utf-8')).decode('latin-1')
 
             # Create a new Transaction
-            index = blockgrid.new_transaction(tuple(final['index']), final['data'], final['signature'], final["time"])
+            index = blockgrid.new_transaction(tuple(final['index']), final['data'], final['signature'], final["time"],
+                                              final["approved"])
             blocks.append(index)
 
         response = {'message': f'Transaction will be added to regions {blocks}'}
@@ -273,14 +315,17 @@ def get_app():
     def data_at_index():
         values = request.get_json()
 
-        required = ['index', 'time']
+        required = ['index', 'time', 'ticket']
         if not all(k in values for k in required):
             return 'Missing values', 400
 
+        moderator = is_moderator(values["ticket"])
         index = tuple(int(x / 500) for x in values['index'])
+        print(blockgrid.grid[index]["data"])
 
         response = {
-            'block': blockgrid.grid[index]["data"]
+            'block': [{"data": x["data"], "approved": x["approved"]} for x in blockgrid.grid[index]["data"]
+                      if x["approved"] or moderator],
         }
         return jsonify(response), 200
 
@@ -290,9 +335,11 @@ def get_app():
     def bundles_at_index():
         values = request.get_json()
 
-        required = ['index', 'time']
+        required = ['index', 'time', 'ticket']
         if not all(k in values for k in required):
             return 'Missing values', 400
+
+        moderator = is_moderator(values["ticket"])
 
         index = tuple(int(x / 500) for x in values['index'])
         zb = io.BytesIO()
@@ -306,8 +353,9 @@ def get_app():
                             ix = 0
                             bundle = b""
                             while True and name not in bundles:
-                                out = table.query(KeyConditionExpression=Key('time').gt(values['time']) &
-                                                                         Key("name").eq(name + "_" + str(ix)))['Items']
+                                out = persistent_query(Key('time').gt(values['time']) &
+                                                       Key("name").eq(name + "_" + str(ix) + "_" + str(moderator)))[
+                                    'Items']
                                 if len(out) == 0:
                                     break
                                 bundle += out[0]["bundle"].value
