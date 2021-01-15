@@ -76,7 +76,7 @@ class Blockgrid(object):
             try:
                 self.table.put_item(Item=item)
             except self.dynamodb_client.exceptions.ProvisionedThroughputExceededException:
-                sleep(3.0)
+                sleep(1.0)
                 continue
             result = True
 
@@ -86,7 +86,7 @@ class Blockgrid(object):
             try:
                 result = self.table.query(KeyConditionExpression=kce)
             except self.dynamodb_client.exceptions.ProvisionedThroughputExceededException:
-                sleep(3.0)
+                sleep(1.0)
                 pass
         return result
 
@@ -131,9 +131,6 @@ class Blockgrid(object):
         })
 
         self.grid[index]["updated"] = millis
-        for item in self.grid[index]["data"]:
-            for k, v in item.items():
-                print(k, sys.getsizeof(v))
         self.save_block(index, self.grid[index])
 
         return index

@@ -3,7 +3,6 @@ import time
 import atexit
 import io
 
-import steam
 import urllib.request
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -88,9 +87,9 @@ with open("accesskey", "r") as ak, open("./secretkey", "r") as sk:
                               region_name='us-east-2',
                               aws_access_key_id=ak.read(),
                               aws_secret_access_key=sk.read())
-# dynamodb.Table('Grid').delete()
-# table = dynamodb.Table('Assets')
-# table.delete()
+#dynamodb.Table('Grid').delete()
+#table = dynamodb.Table('Assets')
+#table.delete()
 try:
     create_asset_table()
 except dynamodb_client.exceptions.ResourceInUseException:
@@ -233,7 +232,7 @@ def get_app():
             try:
                 table.put_item(Item=item)
             except dynamodb_client.exceptions.ProvisionedThroughputExceededException:
-                time.sleep(3.0)
+                time.sleep(1.0)
                 continue
             result = True
 
@@ -243,7 +242,7 @@ def get_app():
             try:
                 result = table.query(KeyConditionExpression=kce)
             except dynamodb_client.exceptions.ProvisionedThroughputExceededException:
-                time.sleep(3.0)
+                time.sleep(1.0)
                 pass
         return result
 
@@ -259,7 +258,7 @@ def get_app():
             ix = 0
 
             # Check if bundle has already been stored
-            result = persistent_query(Key('name').eq(k + "_" + str(ix) + "_" + str(moderator)))
+            result = persistent_query(Key('name').eq(k + "_" + str(ix)))
             if len(result["Items"]) != 0:
                 continue
 
@@ -268,7 +267,7 @@ def get_app():
             chunks = [bundle[y - x:y] for y in range(x, len(bundle) + x, x)]
 
             for chunk in chunks:
-                persistent_put({"name": k + "_" + str(ix) + "_" + str(moderator), "time": millis, "bundle": chunk})
+                persistent_put({"name": k + "_" + str(ix), "time": millis, "bundle": chunk})
                 ix += 1
                 time.sleep(3.0)
 
@@ -322,6 +321,8 @@ def get_app():
         moderator = is_moderator(values["ticket"])
         index = tuple(int(x / 500) for x in values['index'])
         print(blockgrid.grid[index]["data"])
+        print([{"data": x["data"], "approved": x["approved"]} for x in blockgrid.grid[index]["data"]
+                      if x["approved"] or moderator])
 
         response = {
             'block': [{"data": x["data"], "approved": x["approved"]} for x in blockgrid.grid[index]["data"]
@@ -347,21 +348,23 @@ def get_app():
         with zipfile.ZipFile(zb, "a", zipfile.ZIP_DEFLATED, False) as zippedBundles:
             for item in blockgrid.grid[index]["data"]:
                 for k, v in item.items():
-                    if k == "data":
+                    print(k == "data" and (item["approved"] or moderator))
+                    print(k == "data", item["approved"], moderator)
+                    if k == "data" and (item["approved"] or moderator):
                         for k2, v2, in json.loads(v).items():
                             name = v2["filepath"]
                             ix = 0
                             bundle = b""
                             while True and name not in bundles:
                                 out = persistent_query(Key('time').gt(values['time']) &
-                                                       Key("name").eq(name + "_" + str(ix) + "_" + str(moderator)))[
-                                    'Items']
+                                                       Key("name").eq(name + "_" + str(ix)))['Items']
                                 if len(out) == 0:
                                     break
                                 bundle += out[0]["bundle"].value
                                 ix += 1
 
                             if len(bundle) > 0:
+                                print(bundles)
                                 bundles.add(name)
                                 zippedBundles.writestr(name, io.BytesIO(bundle).getvalue(),
                                                        compress_type=zipfile.ZIP_DEFLATED)
