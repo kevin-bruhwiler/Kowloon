@@ -6,12 +6,20 @@ import pickle
 import sys
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Key, Attr
+from decimal import Decimal
 
 from time import time, sleep
 from urllib.parse import urlparse
 
 from sign import verify
+
+
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return int(obj)
+        return super(DecimalEncoder, self).default(obj)
 
 
 class Blockgrid(object):
@@ -51,7 +59,29 @@ class Blockgrid(object):
 
                     if len(block) > 0:
                         grid[(i, j, k)] = json.loads(block)
+                        if "version" not in grid[(i, j, k)]:
+                            grid[(i, j, k)]["version"] = 0
         return grid
+
+    def refresh_index(self, idx):
+        """
+        Read the data for a specific index from dynamodb
+        :param: <tuple> The index being refreshed
+        """
+        block = ""
+        ix = 0
+        version = 0
+        while True:
+            out = self.persistent_query(Key('index').eq(str(idx) + "_" + str(ix)))['Items']
+            if len(out) == 0:
+                break
+            block += out[0]["block"]
+            ix += 1
+            version = out[0]["version"]
+
+        if len(block) > 0:
+            self.grid[idx] = json.loads(block)
+            self.grid[idx]["version"] = version
 
     def save_block(self, idx, block):
         """
@@ -61,24 +91,35 @@ class Blockgrid(object):
         :return:
         """
         x = 400000 // 4
-        block = json.dumps(block)
+        block = json.dumps(block, cls=DecimalEncoder)
         chunks = [block[y - x:y] for y in range(x, len(block) + x, x)]
         ix = 0
+        version = self.grid[idx]["version"]
+        success = True
 
         for chunk in chunks:
-            self.persistent_put({"index": str(idx) + "_" + str(ix), "block": chunk})
+            success = self.persistent_put({"index": str(idx) + "_" + str(ix), "block": chunk, "version": version + 1}, version)
             ix += 1
-            sleep(3.0)
+            sleep(1.0)
+            if not success:
+                break
+        if success:
+            self.grid[idx]["version"] += 1
+        return success
 
-    def persistent_put(self, item):
+    def persistent_put(self, item, previous_version):
         result = None
         while result is None:
             try:
-                self.table.put_item(Item=item)
+                self.table.put_item(Item=item, ConditionExpression=Attr('version').eq(previous_version) |
+                                                                   Attr('version').not_exists())
             except self.dynamodb_client.exceptions.ProvisionedThroughputExceededException:
                 sleep(1.0)
                 continue
+            except self.dynamodb_client.exceptions.ConditionalCheckFailedException:
+                return False
             result = True
+        return result
 
     def persistent_query(self, kce):
         result = None
@@ -107,7 +148,8 @@ class Blockgrid(object):
             'proof': None,
             'owner': None,
             'previous_hash': previous_hash,
-            'previous_index': tuple(previous_index)
+            'previous_index': tuple(previous_index),
+            'version': 0,
         }
 
         self.grid[index] = block
@@ -123,15 +165,20 @@ class Blockgrid(object):
         :return: <int> The index of the Block that will hold this transaction
         """
 
-        self.grid[index]["data"].append({
-            'data': data,
-            'signature': signature,
-            'updated': millis,
-            'approved': approved
-        })
+        while True:
+            self.grid[index]["data"].append({
+                'data': data,
+                'signature': signature,
+                'updated': millis,
+                'approved': approved,
+            })
 
-        self.grid[index]["updated"] = millis
-        self.save_block(index, self.grid[index])
+            self.grid[index]["updated"] = millis
+            success = self.save_block(index, self.grid[index])
+            if success:
+                self.grid[index]["version"] += 1
+                break
+            self.refresh_index(index)
 
         return index
 

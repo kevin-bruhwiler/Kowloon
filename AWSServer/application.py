@@ -2,6 +2,7 @@ import json
 import time
 import atexit
 import io
+import threading
 
 import urllib.request
 
@@ -117,6 +118,7 @@ def get_app():
 
     node_identifier = str(uuid4()).replace('-', '')
     moderators = set(line.strip() for line in open('moderators'))
+    sem = threading.Semaphore()
     blockgrid = Blockgrid()
 
     with open('webAPIkey', 'r') as file:
@@ -275,17 +277,24 @@ def get_app():
             if moderator and k == "delete":
                 indexes = [v2 for _, v2 in v.items()]
                 for ix in indexes:
-                    for d in blockgrid.grid[tuple(int(x / 500) for x in ix)]["data"]:
-                        keys_to_remove = []
-                        key_data = json.loads(d["data"])
-                        for k2, v2 in key_data.items():
-                            if "filepath" in v2 and k2 + "," + v2["filepath"] in v:
-                                keys_to_remove.append(k2)
-                        for key in keys_to_remove:
-                            del key_data[key]
-                        d["data"] = json.dumps(key_data)
-                        blockgrid.persistent_put({"index": str(tuple(int(x / 500) for x in ix)), "block":
-                            blockgrid.grid[tuple(int(x / 500) for x in ix)]})
+                    sem.acquire()
+                    while True:
+                        for d in blockgrid.grid[tuple(int(x / 500) for x in ix)]["data"]:
+                            keys_to_remove = []
+                            key_data = json.loads(d["data"])
+                            for k2, v2 in key_data.items():
+                                if "filepath" in v2 and k2 + "," + v2["filepath"] in v:
+                                    keys_to_remove.append(k2)
+                            for key in keys_to_remove:
+                                del key_data[key]
+                            d["data"] = json.dumps(key_data)
+
+                        success = blockgrid.save_block(tuple(int(x / 500) for x in ix),
+                                                       blockgrid.grid[tuple(int(x / 500) for x in ix)])
+                        if success:
+                            break
+                        blockgrid.refresh_index(tuple(int(x / 500) for x in ix))
+                    sem.release()
 
         indexes = {tuple(int(x / 500) for x in v["position"]): {} for _, v in values.items() if "position" in v}
         for k, v in values.items():
@@ -320,9 +329,6 @@ def get_app():
 
         moderator = is_moderator(values["ticket"])
         index = tuple(int(x / 500) for x in values['index'])
-        print(blockgrid.grid[index]["data"])
-        print([{"data": x["data"], "approved": x["approved"]} for x in blockgrid.grid[index]["data"]
-                      if x["approved"] or moderator])
 
         response = {
             'block': [{"data": x["data"], "approved": x["approved"]} for x in blockgrid.grid[index]["data"]
@@ -348,8 +354,6 @@ def get_app():
         with zipfile.ZipFile(zb, "a", zipfile.ZIP_DEFLATED, False) as zippedBundles:
             for item in blockgrid.grid[index]["data"]:
                 for k, v in item.items():
-                    print(k == "data" and (item["approved"] or moderator))
-                    print(k == "data", item["approved"], moderator)
                     if k == "data" and (item["approved"] or moderator):
                         for k2, v2, in json.loads(v).items():
                             name = v2["filepath"]
@@ -364,7 +368,6 @@ def get_app():
                                 ix += 1
 
                             if len(bundle) > 0:
-                                print(bundles)
                                 bundles.add(name)
                                 zippedBundles.writestr(name, io.BytesIO(bundle).getvalue(),
                                                        compress_type=zipfile.ZIP_DEFLATED)
